@@ -9,7 +9,7 @@ Build for linux, windows (x64) OS.
 How to build (use docker):
 ```
 git clone --recursive https://github.com/Vai3soh/ovpncli
-cd go-openvpn-ng
+cd ovpncli
 make build 
 ```
 How to use:
