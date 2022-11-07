@@ -1,0 +1,17 @@
+--- ovpncli.go	2022-10-24 16:18:08.933801786 +1000
++++ ovpncli.go	2022-10-24 16:17:44.145769658 +1000
+@@ -760,6 +760,14 @@
+ extern void _wrap_ClientAPI_OpenVPNClient_tun_builder_establish_lite_ovpncli_f208ab142d9be705(uintptr_t _swig_base);
+ extern void _wrap_ClientAPI_OpenVPNClient_tun_builder_teardown_ovpncli_f208ab142d9be705(uintptr_t _swig_base, _Bool arg1);
+ #undef intgo
++#cgo CFLAGS: -I${SRCDIR}
++#cgo linux LDFLAGS: -L${SRCDIR} -L${SRCDIR}/deps/libs/
++#cgo linux CXXFLAGS: -DASIO_STANDALONE -DHAVE_LZ4 -DLZ4_DISABLE_DEPRECATE_WARNINGS -DMBEDTLS_DEPRECATED_REMOVED -DUSE_ASIO -DUSE_MBEDTLS -I${SRCDIR}/deps/asio -Wall -Wsign-compare -std=gnu++14
++#cgo linux LDFLAGS: -lopenvpn3_Linux_x86_64 -lmbedtls -llz4 -lpthread
++
++#cgo windows LDFLAGS: -L${SRCDIR} -L${SRCDIR}/deps_win/deps-x86_64/lib/
++#cgo windows CXXFLAGS: -DASIO_DISABLE_LOCAL_SOCKETS -DASIO_STANDALONE -DHAVE_LZ4 -DLZ4_DISABLE_DEPRECATE_WARNINGS -DMBEDTLS_DEPRECATED_REMOVED -DTAP_WIN_COMPONENT_ID=tap0901 -DUSE_ASIO -DUSE_OPENSSL -D_CRT_SECURE_NO_WARNINGS -I${SRCDIR}/deps_win/deps-x86_64/includes/asio -O3 -Wa,-mbig-obj -Wall -Wsign-compare -std=gnu++14
++#cgo windows LDFLAGS: -lopenvpn3_Windows_x86_64 -lssl -lcrypto -llz4 -lws2_32 -lrpcrt4 -liphlpapi -lsetupapi -lwininet -lole32 -lfwpuclnt -lwtsapi32 -luuid
+ */
+ import "C"
+ 
