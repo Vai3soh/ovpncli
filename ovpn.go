@@ -105,8 +105,14 @@ func (c *client) CallbackError() error {
 	}
 }
 
+func (c *client) isLive() bool {
+	return c.Swigcptr() != 0
+}
+
 func (c *client) StopConnection() {
-	c.Stop()
+	if c.isLive() {
+		c.Stop()
+	}
 }
 
 func DeleteClient(c Client) {
