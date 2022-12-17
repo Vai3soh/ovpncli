@@ -33,6 +33,10 @@ build_library_windows:
 	cp -R  $(dir_windows_build)/* .
 	rm -rf Readme
 	tar -xvzpf build_windows_deps.tar.gz && rm -rf build_windows_deps.tar.gz
+	wget -O /tmp/lz4_win64_v1_9_4.zip https://github.com/lz4/lz4/releases/download/v1.9.4/lz4_win64_v1_9_4.zip
+	cd /tmp/ && mkdir lib_ && unzip /tmp/lz4_win64_v1_9_4.zip -d lib_
+	mv /tmp/lib_/static/liblz4_static.lib deps_win/deps-x86_64/lib/liblz4.a
+	rm -rf deps_win/deps-x86_64/lib/liblz4.dll.a /tmp/lz4_win64_v1_9_4.zip /tmp/lib_
 	
 build: build_library_linux build_library_windows patch_ovpncli patch_wrap copy_source_code copy_header_lib patch_header patch_bind_go
 
