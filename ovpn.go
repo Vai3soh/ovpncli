@@ -18,6 +18,7 @@ package ovpncli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"golang.org/x/sync/errgroup"
@@ -26,36 +27,41 @@ import (
 type Client interface {
 	ClientAPI_OpenVPNClient
 	deleteClient()
-	StartConnection(ctx context.Context)
+	StartConnection() error
 	StopConnection()
 	Reconnection(time int)
 	ResumeConnect()
 	PauseConnect(reason string)
-	CallbackError() error
+	SetContext(ctx context.Context)
 }
 
 type client struct {
 	ClientAPI_OpenVPNClient
-	statusErr chan error
-	g         *errgroup.Group
+	g      *errgroup.Group
+	ctx    context.Context
+	signal chan struct{}
 }
 
 type clientConfig struct {
 	ClientAPI_Config
 }
 
+func (c *client) SetContext(ctx context.Context) {
+	c.ctx = ctx
+}
+
 func (c *client) deleteClient() {
 	DeleteDirectorClientAPI_OpenVPNClient(c.ClientAPI_OpenVPNClient)
 }
 
-func (c *client) controlCancelContext(ctx context.Context) {
+func (c *client) controlCancelContext() error {
 	for {
 		select {
-		case <-ctx.Done():
+		case <-c.ctx.Done():
 			c.StopConnection()
-			return
-		default:
-			continue
+			return c.ctx.Err()
+		case <-c.signal:
+			return nil
 		}
 	}
 }
@@ -76,35 +82,31 @@ func (c *client) Reconnection(time int) {
 	c.Reconnect(time)
 }
 
-func (c *client) StartConnection(ctx context.Context) {
+func (c *client) StartConnection() error {
 
 	c.g.Go(func() error {
 		status := c.Connect()
 		if status.GetError() {
 			return fmt.Errorf("error with status: [%s]", status.GetMessage())
 		}
+		if c.ctx.Err() == nil {
+			c.signal <- struct{}{}
+		}
 		return nil
 	})
 
-	go c.controlCancelContext(ctx)
-	go c.getErrorFromSession()
-}
+	c.g.Go(func() error {
+		err := c.controlCancelContext()
+		return err
+	})
 
-func (c *client) getErrorFromSession() {
-	c.statusErr <- c.g.Wait()
-}
-
-func (c *client) CallbackError() error {
-	for {
-		select {
-		case err := <-c.statusErr:
-			return err
-		default:
-			continue
-		}
+	if err := c.g.Wait(); err == nil || errors.Is(err, context.Canceled) {
+		return nil
+	} else {
+		return err
 	}
-}
 
+}
 func (c *client) isLive() bool {
 	return c.Swigcptr() != 0
 }
@@ -121,13 +123,16 @@ func DeleteClient(c Client) {
 
 type OverwriteClient interface{}
 
-func NewClient(ocl OverwriteClient) Client {
+func NewClient(ocl OverwriteClient, ctx context.Context) Client {
+
+	eg, gctx := errgroup.WithContext(ctx)
 
 	cl := NewDirectorClientAPI_OpenVPNClient(ocl)
 	cli := &client{
 		ClientAPI_OpenVPNClient: cl,
-		statusErr:               make(chan error),
-		g:                       &errgroup.Group{},
+		g:                       eg,
+		ctx:                     gctx,
+		signal:                  make(chan struct{}),
 	}
 	return cli
 }

@@ -18,139 +18,399 @@ package ovpncli
 
 import (
 	"context"
-	"io"
-	"log"
-	"net/http"
-	"strings"
-	"testing"
-	"time"
+	"errors"
+	"fmt"
 
-	"golang.org/x/net/html"
+	"golang.org/x/sync/errgroup"
 )
 
-func getResponse(client http.Client, url string) *http.Response {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return resp
-}
-
-func getConfigUrl(n *html.Node) string {
-
-	if n.Type == html.ElementNode && n.Data == "a" {
-		for _, a := range n.Attr {
-			if a.Key == "href" {
-
-				if strings.Contains(a.Val, ".ovpn") {
-					link := "https://ipspeed.info/" + a.Val
-					return link
-				}
-			}
-		}
-	}
-
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		r := getConfigUrl(c)
-		if r != "" {
-			return r
-		}
-	}
-	return ""
-}
-
-type overwriteClient struct {
+type Client interface {
 	ClientAPI_OpenVPNClient
+	deleteClient()
+	StartConnection() error
+	StopConnection()
+	Reconnection(time int)
+	ResumeConnect()
+	PauseConnect(reason string)
+	SetContext(ctx context.Context)
 }
 
-func (ocl *overwriteClient) Log(arg2 ClientAPI_LogInfo) {
-	log.Printf("log: %s", arg2.GetText())
-
+type client struct {
+	ClientAPI_OpenVPNClient
+	g      *errgroup.Group
+	ctx    context.Context
+	signal chan struct{}
 }
 
-func (ocl *overwriteClient) Event(arg2 ClientAPI_Event) {
-	log.Printf("event name: %s", arg2.GetName())
-	log.Printf("event info: %s", arg2.GetInfo())
+type clientConfig struct {
+	ClientAPI_Config
 }
 
-func (ocl *overwriteClient) Remote_override_enabled() {
-
+func (c *client) SetContext(ctx context.Context) {
+	c.ctx = ctx
 }
 
-func (ocl *overwriteClient) Socket_protect() {
-
+func (c *client) deleteClient() {
+	DeleteDirectorClientAPI_OpenVPNClient(c.ClientAPI_OpenVPNClient)
 }
 
-func getProfile() string {
-	client := http.Client{
-		Timeout: 6 * time.Second,
+func (c *client) controlCancelContext() error {
+	for {
+		select {
+		case <-c.ctx.Done():
+			c.StopConnection()
+			return c.ctx.Err()
+		case <-c.signal:
+			return nil
+		}
 	}
-	resp := getResponse(client, `https://ipspeed.info/freevpn_openvpn.php?language=en`)
-
-	bytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	doc, err := html.Parse(strings.NewReader(string(bytes)))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	url := getConfigUrl(doc)
-	resp = getResponse(client, url)
-	defer resp.Body.Close()
-	bytes, err = io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return string(bytes)
-
 }
 
-func TestConnection(t *testing.T) {
-	profile := getProfile()
-	cfg := NewClientConfig(
-		WithConfig(profile),
-		WithSslDebugLevel(0),
-		WithCompressionMode("yes"),
-		WithDisableClientCert(true),
-		WithLegacyAlgorithms(true),
-		WithNonPreferredDCAlgorithms(true),
-		WithTunPersist(true),
-	)
-	creds := NewClientCreds(
-		WithPassword(""),
-		WithUsername(""),
-	)
+func (c *client) ResumeConnect() {
+	c.Resume()
+}
 
-	ocl := &overwriteClient{}
-	cliObj := NewClient(ocl)
-	ocl.ClientAPI_OpenVPNClient = cliObj
-	ev := cliObj.Eval_config(cfg)
-	if ev.GetError() {
-		log.Fatalf("err: config eval failed [%s]\n", ev.GetMessage())
+// Pause the client -- useful to avoid continuous reconnection attempts
+// when network is down.  May be called from a different thread
+// when connect() is running.
+
+func (c *client) PauseConnect(reason string) {
+	c.Pause(reason)
+}
+
+func (c *client) Reconnection(time int) {
+	c.Reconnect(time)
+}
+
+func (c *client) StartConnection() error {
+
+	c.g.Go(func() error {
+		status := c.Connect()
+		if status.GetError() {
+			return fmt.Errorf("error with status: [%s]", status.GetMessage())
+		}
+		if c.ctx.Err() == nil {
+			c.signal <- struct{}{}
+		}
+		return nil
+	})
+
+	c.g.Go(func() error {
+		err := c.controlCancelContext()
+		return err
+	})
+
+	if err := c.g.Wait(); err == nil || errors.Is(err, context.Canceled) {
+		return nil
+	} else {
+		return err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func(sec int) {
-		time.Sleep(time.Duration(sec) * time.Millisecond)
-		cancel()
-	}(20000)
+}
+func (c *client) isLive() bool {
+	return c.Swigcptr() != 0
+}
 
-	status := cliObj.Provide_creds(creds)
-	if status.GetError() {
-		log.Fatal(status.GetMessage())
+func (c *client) StopConnection() {
+	if c.isLive() {
+		c.Stop()
 	}
-	cliObj.StartConnection(ctx)
-	err := cliObj.CallbackError()
-	if err != nil {
-		log.Println(err)
+}
+
+func DeleteClient(c Client) {
+	c.deleteClient()
+}
+
+type OverwriteClient interface{}
+
+func NewClient(ocl OverwriteClient, ctx context.Context) Client {
+
+	eg, gctx := errgroup.WithContext(ctx)
+
+	cl := NewDirectorClientAPI_OpenVPNClient(ocl)
+	cli := &client{
+		ClientAPI_OpenVPNClient: cl,
+		g:                       eg,
+		ctx:                     gctx,
+		signal:                  make(chan struct{}),
 	}
-	defer DeleteClient(cliObj)
+	return cli
+}
+
+type Option func(*clientConfig)
+
+func NewClientConfig(opts ...Option) *clientConfig {
+	op := &clientConfig{
+		ClientAPI_Config: NewClientAPI_Config(),
+	}
+	for _, opt := range opts {
+		opt(op)
+	}
+	return op
+}
+
+func WithConfig(config string) Option {
+	return func(op *clientConfig) {
+		op.SetContent(config)
+	}
+}
+
+// 1,2
+func WithSslDebugLevel(level int) Option {
+	return func(op *clientConfig) {
+		op.SetSslDebugLevel(level)
+	}
+}
+
+// yes|no|asym
+func WithCompressionMode(mode string) Option {
+	return func(op *clientConfig) {
+		op.SetCompressionMode(mode)
+	}
+}
+
+func WithConnTimeout(time int) Option {
+	return func(op *clientConfig) {
+		op.SetConnTimeout(time)
+	}
+}
+
+func WithLegacyAlgorithms(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetEnableLegacyAlgorithms(enable)
+	}
+}
+
+func WithNonPreferredDCAlgorithms(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetEnableNonPreferredDCAlgorithms(enable)
+	}
+}
+
+func WithDisableClientCert(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetDisableClientCert(enable)
+	}
+}
+
+func WithClockTickMS(timeMS uint) Option {
+	return func(op *clientConfig) {
+		op.SetClockTickMS(timeMS)
+	}
+}
+
+func WithRetryOnAuthFailed(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetRetryOnAuthFailed(enable)
+	}
+}
+
+func WithAllowLocalDnsResolvers(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetAllowLocalDnsResolvers(enable)
+	}
+}
+
+func WithAllowLocalLanAccess(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetAllowLocalLanAccess(enable)
+	}
+}
+
+func WithAllowUnusedAddrFamilies(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetAllowUnusedAddrFamilies(arg)
+	}
+}
+
+func WithAltProxy(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetAltProxy(enable)
+	}
+}
+
+func WithAutologinSessions(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetAutologinSessions(enable)
+	}
+}
+
+func WithDco(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetDco(enable)
+	}
+}
+
+func WithEcho(enable bool) Option {
+	return func(op *clientConfig) {
+		op.SetEcho(enable)
+	}
+}
+
+func WithExternalPkiAlias(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetExternalPkiAlias(arg)
+	}
+}
+
+func WithGenerateTunBuilderCaptureEvent(arg bool) Option {
+	return func(op *clientConfig) {
+		op.SetGenerate_tun_builder_capture_event(arg)
+	}
+}
+
+func WithGoogleDnsFallback(arg bool) Option {
+	return func(op *clientConfig) {
+		op.SetGoogleDnsFallback(arg)
+	}
+}
+
+func WithGremlinConfig(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetGremlinConfig(arg)
+	}
+}
+
+func WithGuiVersion(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetGuiVersion(arg)
+	}
+}
+
+func WithHwAddrOverride(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetHwAddrOverride(arg)
+	}
+}
+
+func WithInfo(arg bool) Option {
+	return func(op *clientConfig) {
+		op.SetInfo(arg)
+	}
+}
+
+func WithPeerInfo(arg Std_vector_Sl_openvpn_ClientAPI_KeyValue_Sg_) Option {
+	return func(op *clientConfig) {
+		op.SetPeerInfo(arg)
+	}
+}
+
+func WithPlatformVersion(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetPlatformVersion(arg)
+	}
+}
+
+func WithPortOverride(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetPortOverride(arg)
+	}
+}
+
+func WithPrivateKeyPassword(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetPrivateKeyPassword(arg)
+	}
+}
+
+func WithProtoOverride(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetProtoOverride(arg)
+	}
+}
+
+func WithProtoVersionOverride(arg int) Option {
+	return func(op *clientConfig) {
+		op.SetProtoVersionOverride(arg)
+	}
+}
+
+func WithProxyAllowCleartextAuth(arg bool) Option {
+	return func(op *clientConfig) {
+		op.SetProxyAllowCleartextAuth(arg)
+	}
+}
+
+func WithProxyHost(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetProxyHost(arg)
+	}
+}
+
+func WithProxyPassword(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetProxyPassword(arg)
+	}
+}
+
+func WithProxyPort(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetProxyPort(arg)
+	}
+}
+
+func WithProxyUsername(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetProxyUsername(arg)
+	}
+}
+
+func WithServerOverride(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetServerOverride(arg)
+	}
+}
+
+func WithSsoMethods(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetSsoMethods(arg)
+	}
+}
+
+func WithSynchronousDnsLookup(arg bool) Option {
+	return func(op *clientConfig) {
+		op.SetSynchronousDnsLookup(arg)
+	}
+}
+
+func WithTlsCertProfileOverride(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetTlsCertProfileOverride(arg)
+	}
+}
+
+func WithTlsCipherList(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetTlsCipherList(arg)
+	}
+}
+
+func WithTlsCiphersuitesList(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetTlsCiphersuitesList(arg)
+	}
+}
+
+func WithTlsVersionMinOverride(arg string) Option {
+	return func(op *clientConfig) {
+		op.SetTlsVersionMinOverride(arg)
+	}
+}
+
+func WithTunPersist(arg bool) Option {
+	return func(op *clientConfig) {
+		op.SetTunPersist(arg)
+	}
+}
+
+func WithWinTun(arg bool) Option {
+	return func(op *clientConfig) {
+		op.SetWintun(arg)
+	}
+}
+
+func WithDefaultKeyDirection(arg int) Option {
+	return func(op *clientConfig) {
+		op.SetDefaultKeyDirection(arg)
+	}
 }
