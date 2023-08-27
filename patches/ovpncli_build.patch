@@ -6,8 +6,8 @@
  #undef intgo
 +#cgo CFLAGS: -I${SRCDIR}
 +#cgo linux LDFLAGS: -L${SRCDIR} -L${SRCDIR}/deps/libs/
-+#cgo linux CXXFLAGS: -DASIO_STANDALONE -DHAVE_LZ4 -DLZ4_DISABLE_DEPRECATE_WARNINGS -DMBEDTLS_DEPRECATED_REMOVED -DUSE_ASIO -DUSE_MBEDTLS -I${SRCDIR}/deps/asio -Wall -Wsign-compare -std=gnu++14
-+#cgo linux LDFLAGS: -lopenvpn3_Linux_x86_64 -lmbedtls -llz4 -lpthread
++#cgo linux CXXFLAGS: -DASIO_STANDALONE -DHAVE_LZ4 -DLZ4_DISABLE_DEPRECATE_WARNINGS -DMBEDTLS_DEPRECATED_REMOVED -DUSE_OPENSSL -I${SRCDIR}/deps/asio -Wall -Wsign-compare -std=gnu++14
++#cgo linux LDFLAGS: -lopenvpn3_Linux_x86_64 -lssl -lcrypto -llz4 -lpthread
 +
 +#cgo windows LDFLAGS: -L${SRCDIR} -L${SRCDIR}/deps_win/deps-x86_64/lib/
 +#cgo windows CXXFLAGS: -DASIO_DISABLE_LOCAL_SOCKETS -DASIO_STANDALONE -DHAVE_LZ4 -DLZ4_DISABLE_DEPRECATE_WARNINGS -DMBEDTLS_DEPRECATED_REMOVED -DTAP_WIN_COMPONENT_ID=tap0901 -DUSE_ASIO -DUSE_OPENSSL -D_CRT_SECURE_NO_WARNINGS -I${SRCDIR}/deps_win/deps-x86_64/includes/asio -O3 -Wa,-mbig-obj -Wall -Wsign-compare -std=gnu++14

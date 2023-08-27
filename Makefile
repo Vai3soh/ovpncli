@@ -3,6 +3,9 @@ SHELL := /bin/bash
 dir_linux_build := "third_party/openvpn3/build/linux/client/"
 dir_windows_build := "third_party/openvpn3/build/windows/client/"
 
+update_submodule_repo:
+	git submodule update --remote third_party/openvpn3
+	
 patch_ovpncli:
 	patch ovpncli.go patches/ovpncli_build.patch
 
