@@ -779,7 +779,7 @@ extern void _wrap_ClientAPI_OpenVPNClient_tun_builder_teardown_ovpncli_f208ab142
 #undef intgo
 #cgo CFLAGS: -I${SRCDIR}
 #cgo linux LDFLAGS: -L${SRCDIR} -L${SRCDIR}/deps/libs/
-#cgo linux CXXFLAGS: -DASIO_STANDALONE -DHAVE_LZ4 -DLZ4_DISABLE_DEPRECATE_WARNINGS -DMBEDTLS_DEPRECATED_REMOVED -DUSE_OPENSSL -I${SRCDIR}/deps/asio -Wall -Wsign-compare -std=gnu++14
+#cgo linux CXXFLAGS: -DASIO_STANDALONE -DHAVE_LZ4 -DLZ4_DISABLE_DEPRECATE_WARNINGS -DMBEDTLS_DEPRECATED_REMOVED -DUSE_ASIO -DUSE_OPENSSL -I${SRCDIR}/deps/asio -Wall -Wsign-compare -std=gnu++14
 #cgo linux LDFLAGS: -lopenvpn3_Linux_x86_64 -lssl -lcrypto -llz4 -lpthread
 
 #cgo windows LDFLAGS: -L${SRCDIR} -L${SRCDIR}/deps_win/deps-x86_64/lib/
